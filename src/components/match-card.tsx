@@ -246,7 +246,6 @@ export function MatchCard({
           <div className="flex items-center gap-3">
             {/* Home team input */}
             <div className="flex flex-1 items-center gap-2.5">
-              <Flag teamName={match.team_home} className="h-7 w-9" />
               <ScoreInput
                 value={scoreHome}
                 onChange={(v) => {
@@ -268,7 +267,6 @@ export function MatchCard({
                   setSaved(false);
                 }}
               />
-              <Flag teamName={match.team_away} className="h-7 w-9" />
             </div>
           </div>
 
