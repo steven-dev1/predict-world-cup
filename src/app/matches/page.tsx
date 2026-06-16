@@ -1,6 +1,6 @@
 "use client";
 
-import { useEffect, useState, useMemo } from "react";
+import { useEffect, useState, useMemo, useRef } from "react";
 import { useRouter } from "next/navigation";
 import { useAuth } from "@/contexts/auth-context";
 import { useMatches, usePredictions } from "@/hooks/use-data";
@@ -26,8 +26,26 @@ export default function MatchesPage() {
   const [stageFilter, setStageFilter] = useState<StageFilter>("all");
   const [expandedDate, setExpandedDate] = useState<string | null>(null);
   const [initialLoadDone, setInitialLoadDone] = useState(false);
+  const groupFilterRef = useRef<HTMLDivElement>(null);
 
   const loading = matchesLoading || predsLoading;
+
+  // Enable horizontal scroll with mouse wheel on PC
+  useEffect(() => {
+    const el = groupFilterRef.current;
+    if (!el) return;
+
+    const handleWheel = (e: WheelEvent) => {
+      // Only convert vertical scroll to horizontal when hovering the filter
+      if (Math.abs(e.deltaY) > Math.abs(e.deltaX)) {
+        e.preventDefault();
+        el.scrollLeft += e.deltaY;
+      }
+    };
+
+    el.addEventListener("wheel", handleWheel, { passive: false });
+    return () => el.removeEventListener("wheel", handleWheel);
+  }, []);
 
   // Create predictions map
   const predictionsMap = useMemo(() => {
@@ -155,7 +173,10 @@ export default function MatchesPage() {
 
           {/* Group filter */}
           {stageFilter !== "knockout" && (
-            <div className="flex gap-2 overflow-x-auto pb-2 scrollbar-hide">
+            <div
+              ref={groupFilterRef}
+              className="flex gap-2 overflow-x-auto pb-2 scroll-horizontal-wheel"
+            >
               <button
                 onClick={() => setActiveGroup("all")}
                 className={clsx(

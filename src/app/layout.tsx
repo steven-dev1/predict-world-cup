@@ -17,6 +17,9 @@ export const metadata: Metadata = {
   title: "PichaCup Predicciones",
   description: "Predicciones del Mundial 2026 - Compite con tu grupo",
   manifest: "/manifest.json",
+  icons: {
+    icon: "/favicon.svg",
+  },
   appleWebApp: {
     capable: true,
     statusBarStyle: "black-translucent",

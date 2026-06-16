@@ -53,6 +53,30 @@
     display: none;
   }
 
+  /* Allow horizontal scroll with mouse wheel on PC */
+  .scroll-horizontal-wheel {
+    overflow-x: auto;
+    overscroll-behavior-x: contain;
+  }
+
+  .scroll-horizontal-wheel:hover {
+    scrollbar-width: thin;
+    scrollbar-color: rgba(100, 116, 139, 0.3) transparent;
+  }
+
+  .scroll-horizontal-wheel::-webkit-scrollbar {
+    height: 4px;
+  }
+
+  .scroll-horizontal-wheel::-webkit-scrollbar-track {
+    background: transparent;
+  }
+
+  .scroll-horizontal-wheel::-webkit-scrollbar-thumb {
+    background-color: rgba(100, 116, 139, 0.3);
+    border-radius: 4px;
+  }
+
   /* Number input - hide spinners completely */
   input[type="number"]::-webkit-inner-spin-button,
   input[type="number"]::-webkit-outer-spin-button {
