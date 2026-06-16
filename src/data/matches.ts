@@ -125,6 +125,7 @@ export const matchesData: Omit<Match, "id">[] = [
 ];
 
 // Group matches by date for display, sorted with today first
+// Las fechas en la DB ya están en hora de Colombia, se usan directamente
 export function groupMatchesByDate<
   T extends { match_date: string },
 >(matches: T[]) {
@@ -140,16 +141,15 @@ export function groupMatchesByDate<
     grouped[date].push(match);
   }
 
-  const today = new Date();
-  today.setHours(0, 0, 0, 0);
+  // Obtener "hoy" en zona horaria de Colombia
+  const nowColombia = new Date(new Date().toLocaleString("en-US", { timeZone: "America/Bogota" }));
+  const today = new Date(nowColombia.getFullYear(), nowColombia.getMonth(), nowColombia.getDate());
 
   return Object.entries(grouped).sort(([, a], [, b]) => {
     const dateA = new Date(a[0].match_date);
     const dateB = new Date(b[0].match_date);
-    const dayA = new Date(dateA);
-    const dayB = new Date(dateB);
-    dayA.setHours(0, 0, 0, 0);
-    dayB.setHours(0, 0, 0, 0);
+    const dayA = new Date(dateA.getFullYear(), dateA.getMonth(), dateA.getDate());
+    const dayB = new Date(dateB.getFullYear(), dateB.getMonth(), dateB.getDate());
 
     const aIsToday = dayA.getTime() === today.getTime();
     const bIsToday = dayB.getTime() === today.getTime();
@@ -170,6 +170,7 @@ export function groupMatchesByDate<
 }
 
 // Format match time for display
+// Las fechas en la DB ya están en hora de Colombia
 export function formatMatchTime(dateStr: string) {
   return new Date(dateStr).toLocaleTimeString("es-ES", {
     hour: "2-digit",

@@ -1,9 +1,9 @@
 "use client";
 
-import { useEffect, useState, useCallback, useRef } from "react";
+import { useEffect, useState, useMemo } from "react";
 import { useRouter } from "next/navigation";
 import { useAuth } from "@/contexts/auth-context";
-import { supabase } from "@/lib/supabase/client";
+import { useMatches, usePredictions } from "@/hooks/use-data";
 import { Flag } from "@/components/flag";
 import { formatMatchTime } from "@/data/matches";
 import type { Match } from "@/types/database";
@@ -30,87 +30,71 @@ interface MatchWithPredictions extends Match {
   predictions: PredictionWithUser[];
 }
 
+// Helper to get today in Colombia timezone
+function getColombiaToday(): Date {
+  const now = new Date();
+  const colombiaStr = now.toLocaleString("en-US", { timeZone: "America/Bogota" });
+  const colombia = new Date(colombiaStr);
+  return new Date(colombia.getFullYear(), colombia.getMonth(), colombia.getDate());
+}
+
 export default function TodayPage() {
   const { user, loading: authLoading } = useAuth();
   const router = useRouter();
-  const [matches, setMatches] = useState<MatchWithPredictions[]>([]);
-  const [loading, setLoading] = useState(true);
-  const [selectedDate, setSelectedDate] = useState<Date>(new Date());
-  const loadedRef = useRef(false);
+  const { matches, isLoading: matchesLoading } = useMatches();
+  const { predictions, isLoading: predsLoading } = usePredictions();
+  const [selectedDate, setSelectedDate] = useState<Date>(getColombiaToday());
 
-  const loadData = useCallback(async () => {
-    if (loadedRef.current) return;
-    loadedRef.current = true;
+  const loading = matchesLoading || predsLoading;
 
-    // Get all matches
-    const { data: allMatches } = await supabase
-      .from("matches")
-      .select("*")
-      .order("match_date", { ascending: true });
-
-    if (!allMatches) {
-      setLoading(false);
-      return;
-    }
-
-    // Get all predictions with user info
-    const { data: allPredictions } = await supabase
-      .from("predictions")
-      .select("*, profiles:user_id(username, id)");
-
-    // Group predictions by match_id
-    const predictionsByMatch: Record<number, PredictionWithUser[]> = {};
-    if (allPredictions) {
-      for (const pred of allPredictions) {
-        const matchId = pred.match_id;
-        if (!predictionsByMatch[matchId]) {
-          predictionsByMatch[matchId] = [];
-        }
-        predictionsByMatch[matchId].push({
-          id: pred.id,
-          score_home: pred.score_home,
-          score_away: pred.score_away,
-          username:
-            (pred.profiles as { username: string })?.username ?? "Anonimo",
-          user_id: pred.user_id,
-        });
+  // Group predictions by match_id
+  const predictionsByMatch = useMemo(() => {
+    const map: Record<number, PredictionWithUser[]> = {};
+    for (const pred of predictions) {
+      const matchId = pred.match_id;
+      if (!map[matchId]) {
+        map[matchId] = [];
       }
+      // profiles may or may not exist depending on API response
+      // eslint-disable-next-line @typescript-eslint/no-explicit-any
+      const profiles = (pred as any).profiles as { username: string } | undefined;
+      map[matchId].push({
+        id: pred.id,
+        score_home: pred.score_home,
+        score_away: pred.score_away,
+        username: profiles?.username ?? "Anonimo",
+        user_id: pred.user_id,
+      });
     }
+    return map;
+  }, [predictions]);
 
-    // Combine matches with predictions
-    const matchesWithPredictions: MatchWithPredictions[] = allMatches.map(
-      (match) => ({
+  // Combine matches with predictions
+  const matchesWithPredictions: MatchWithPredictions[] = useMemo(
+    () =>
+      matches.map((match) => ({
         ...match,
         predictions: predictionsByMatch[match.id] ?? [],
-      })
-    );
+      })),
+    [matches, predictionsByMatch]
+  );
 
-    setMatches(matchesWithPredictions);
-    setLoading(false);
-  }, []);
-
-  useEffect(() => {
-    if (!authLoading && !user) {
-      router.push("/login");
-    }
-  }, [user, authLoading, router]);
-
-  useEffect(() => {
-    if (user) {
-      // eslint-disable-next-line react-hooks/set-state-in-effect
-      loadData();
-    }
-  }, [user, loadData]);
+  // "Ahora" en Colombia para comparar con fechas de DB
+  const nowColombia = new Date(
+    new Date().toLocaleString("en-US", { timeZone: "America/Bogota" })
+  );
 
   // Filter matches by selected date
-  const filteredMatches = matches.filter((m) => {
-    const matchDate = new Date(m.match_date);
-    return (
-      matchDate.getFullYear() === selectedDate.getFullYear() &&
-      matchDate.getMonth() === selectedDate.getMonth() &&
-      matchDate.getDate() === selectedDate.getDate()
-    );
-  });
+  const filteredMatches = useMemo(() => {
+    return matchesWithPredictions.filter((m) => {
+      const matchDate = new Date(m.match_date);
+      return (
+        matchDate.getFullYear() === selectedDate.getFullYear() &&
+        matchDate.getMonth() === selectedDate.getMonth() &&
+        matchDate.getDate() === selectedDate.getDate()
+      );
+    });
+  }, [matchesWithPredictions, selectedDate]);
 
   // Navigate dates
   const goToPrevDate = () => {
@@ -126,11 +110,10 @@ export default function TodayPage() {
   };
 
   const goToToday = () => {
-    setSelectedDate(new Date());
+    setSelectedDate(getColombiaToday());
   };
 
-  const isToday =
-    selectedDate.toDateString() === new Date().toDateString();
+  const isToday = selectedDate.toDateString() === getColombiaToday().toDateString();
 
   const formatDate = (date: Date) => {
     return date.toLocaleDateString("es-ES", {
@@ -139,6 +122,12 @@ export default function TodayPage() {
       month: "long",
     });
   };
+
+  useEffect(() => {
+    if (!authLoading && !user) {
+      router.push("/login");
+    }
+  }, [user, authLoading, router]);
 
   if (authLoading || loading) {
     return (
@@ -190,16 +179,11 @@ export default function TodayPage() {
                 >
                   {formatDate(selectedDate)}
                 </span>
-                {isToday && (
-                  <span className="rounded-md bg-blue-500/20 px-2 py-0.5 text-[10px] font-bold text-blue-400 uppercase">
-                    Hoy
-                  </span>
-                )}
               </div>
               {!isToday && (
                 <button
                   onClick={goToToday}
-                  className="mt-1 text-xs text-blue-400 hover:text-blue-300 transition-colors"
+                  className="mt-1 text-xs text-blue-400 hover:text-blue-300"
                 >
                   Volver a hoy
                 </button>
@@ -219,15 +203,14 @@ export default function TodayPage() {
         {filteredMatches.length === 0 ? (
           <div className="rounded-2xl border border-slate-700/40 bg-slate-800/40 p-8 text-center">
             <CalendarDays className="mx-auto mb-3 h-12 w-12 text-slate-600" />
-            <p className="text-slate-400">
-              No hay partidos este dia
-            </p>
+            <p className="text-slate-400">No hay partidos este dia</p>
           </div>
         ) : (
           <div className="space-y-4">
             {filteredMatches.map((match) => {
               const isKnockout = !match.group_name.startsWith("Group");
-              const isLocked = new Date() >= new Date(match.match_date);
+              const matchDate = new Date(match.match_date);
+              const isLocked = nowColombia >= matchDate;
 
               return (
                 <div
@@ -266,27 +249,15 @@ export default function TodayPage() {
                       <div className="flex items-center gap-2">
                         {match.score_home !== null ? (
                           <span className="text-lg font-bold text-white">
-                            {match.score_home}
+                            {match.score_home} - {match.score_away}
                           </span>
                         ) : (
-                          <span className="text-lg font-bold text-slate-600">
-                            -
-                          </span>
-                        )}
-                        <span className="text-xs text-slate-600">VS</span>
-                        {match.score_away !== null ? (
-                          <span className="text-lg font-bold text-white">
-                            {match.score_away}
-                          </span>
-                        ) : (
-                          <span className="text-lg font-bold text-slate-600">
-                            -
-                          </span>
+                          <span className="text-xs text-slate-500">VS</span>
                         )}
                       </div>
 
                       <div className="flex items-center gap-2">
-                        <span className="font-semibold text-white text-sm">
+                        <span className="font-semibold text-white text-sm text-right">
                           {match.team_away}
                         </span>
                         <Flag teamName={match.team_away} className="h-5 w-7" />
@@ -297,79 +268,53 @@ export default function TodayPage() {
                   {/* Predictions */}
                   <div className="px-4 py-3">
                     {match.predictions.length === 0 ? (
-                      <p className="text-center text-xs text-slate-500 py-2">
-                        Nadie ha predecido este partido aun
+                      <p className="text-xs text-slate-500 text-center">
+                        Sin predicciones aun
                       </p>
                     ) : (
                       <div className="space-y-2">
                         {match.predictions.map((pred) => {
                           const isCurrentUser = pred.user_id === user?.id;
-                          const predResult =
-                            pred.score_home > pred.score_away
-                              ? "W"
-                              : pred.score_home < pred.score_away
-                              ? "L"
-                              : "D";
-                          const actualResult =
-                            match.score_home !== null &&
-                            match.score_away !== null
-                              ? match.score_home > match.score_away
-                                ? "W"
-                                : match.score_home < match.score_away
-                                ? "L"
-                                : "D"
-                              : null;
-
                           const isExact =
                             match.score_home !== null &&
-                            match.score_away !== null &&
                             pred.score_home === match.score_home &&
                             pred.score_away === match.score_away;
-
                           const isCorrect =
-                            actualResult !== null && predResult === actualResult;
+                            match.score_home !== null &&
+                            !isExact &&
+                            ((pred.score_home > pred.score_away &&
+                              (match.score_home ?? 0) > (match.score_away ?? 0)) ||
+                              (pred.score_home < pred.score_away &&
+                                (match.score_home ?? 0) < (match.score_away ?? 0)) ||
+                              (pred.score_home === pred.score_away &&
+                                (match.score_home ?? 0) === (match.score_away ?? 0)));
 
                           return (
                             <div
                               key={pred.id}
                               className={clsx(
-                                "flex items-center justify-between rounded-xl px-3 py-2.5 transition-all",
-                                isExact
-                                  ? "bg-emerald-500/10 border border-emerald-500/20"
-                                  : isCorrect
-                                  ? "bg-amber-500/10 border border-amber-500/15"
-                                  : isCurrentUser
-                                  ? "bg-blue-500/10 border border-blue-500/15"
-                                  : "bg-slate-800/40 border border-slate-700/20"
+                                "flex items-center justify-between rounded-xl px-3 py-2",
+                                isCurrentUser
+                                  ? "bg-blue-500/10 border border-blue-500/20"
+                                  : "bg-slate-800/50"
                               )}
                             >
-                              <div className="flex items-center gap-2.5">
-                                {/* Avatar placeholder */}
-                                <div
-                                  className={clsx(
-                                    "flex h-8 w-8 items-center justify-center rounded-lg text-xs font-bold",
-                                    isCurrentUser
-                                      ? "bg-blue-600/30 text-blue-300"
-                                      : "bg-slate-700/50 text-slate-400"
-                                  )}
-                                >
-                                  {pred.username.slice(0, 2).toUpperCase()}
-                                </div>
+                              <div className="flex items-center gap-2">
                                 <span
                                   className={clsx(
-                                    "text-sm font-medium",
+                                    "text-sm",
                                     isCurrentUser
-                                      ? "text-blue-300"
+                                      ? "font-medium text-blue-300"
                                       : "text-slate-300"
                                   )}
                                 >
                                   {pred.username}
-                                  {isCurrentUser && (
-                                    <span className="ml-1.5 text-[10px] text-blue-400">
-                                      (tu)
-                                    </span>
-                                  )}
                                 </span>
+                                {isCurrentUser && (
+                                  <span className="ml-1.5 text-[10px] text-blue-400">
+                                    (tu)
+                                  </span>
+                                )}
                               </div>
 
                               <div className="flex items-center gap-2">
@@ -378,9 +323,7 @@ export default function TodayPage() {
                                   <span className="text-sm font-bold text-white">
                                     {pred.score_home}
                                   </span>
-                                  <span className="text-xs text-slate-600">
-                                    -
-                                  </span>
+                                  <span className="text-xs text-slate-600">-</span>
                                   <span className="text-sm font-bold text-white">
                                     {pred.score_away}
                                   </span>
@@ -398,11 +341,7 @@ export default function TodayPage() {
                                         : "bg-slate-700/50 text-slate-500"
                                     )}
                                   >
-                                    {isExact
-                                      ? "3"
-                                      : isCorrect
-                                      ? "1"
-                                      : "0"}
+                                    {isExact ? "3" : isCorrect ? "1" : "0"}
                                   </div>
                                 )}
                               </div>

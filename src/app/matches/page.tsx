@@ -1,22 +1,17 @@
 "use client";
 
-import { useEffect, useState, useCallback, useRef } from "react";
+import { useEffect, useState, useMemo } from "react";
 import { useRouter } from "next/navigation";
 import { useAuth } from "@/contexts/auth-context";
-import { supabase } from "@/lib/supabase/client";
+import { useMatches, usePredictions } from "@/hooks/use-data";
 import { MatchCard } from "@/components/match-card";
-import { matchesData, groupMatchesByDate } from "@/data/matches";
+import { groupMatchesByDate } from "@/data/matches";
 import type { Match, Prediction } from "@/types/database";
 import {
+  CalendarDays,
   Calendar,
   Loader2,
   Filter,
-  Trophy,
-  Swords,
-  Shield,
-  ChevronDown,
-  ChevronUp,
-  CalendarDays,
 } from "lucide-react";
 import clsx from "clsx";
 
@@ -25,95 +20,82 @@ type StageFilter = "all" | "group" | "knockout";
 export default function MatchesPage() {
   const { user, loading: authLoading } = useAuth();
   const router = useRouter();
-  const [matches, setMatches] = useState<Match[]>([]);
-  const [predictions, setPredictions] = useState<Record<number, Prediction>>({});
-  const [loading, setLoading] = useState(true);
+  const { matches, isLoading: matchesLoading } = useMatches();
+  const { predictions, isLoading: predsLoading } = usePredictions(user?.id);
   const [activeGroup, setActiveGroup] = useState<string>("all");
   const [stageFilter, setStageFilter] = useState<StageFilter>("all");
   const [expandedDate, setExpandedDate] = useState<string | null>(null);
-  const loadedRef = useRef(false);
+  const [initialLoadDone, setInitialLoadDone] = useState(false);
 
-  const loadData = useCallback(async (userId: string) => {
-    if (loadedRef.current) return;
-    loadedRef.current = true;
+  const loading = matchesLoading || predsLoading;
 
-    const { data: dbMatches } = await supabase
-      .from("matches")
-      .select("*")
-      .order("match_date", { ascending: true });
-
-    let allMatches: Match[] = [];
-
-    if (dbMatches && dbMatches.length > 0) {
-      allMatches = dbMatches;
-    } else {
-      const inserts = matchesData.map((m) => ({
-        external_id: m.external_id,
-        match_date: m.match_date,
-        group_name: m.group_name,
-        team_home: m.team_home,
-        team_away: m.team_away,
-        flag_home: m.flag_home,
-        flag_away: m.flag_away,
-        venue: m.venue,
-        status: m.status,
-      }));
-
-      const { data: seeded } = await supabase
-        .from("matches")
-        .insert(inserts)
-        .select();
-
-      if (seeded) allMatches = seeded;
+  // Create predictions map
+  const predictionsMap = useMemo(() => {
+    const map: Record<number, Prediction> = {};
+    for (const p of predictions) {
+      map[p.match_id] = p;
     }
+    return map;
+  }, [predictions]);
 
-    setMatches(allMatches);
+  // Filter matches
+  const filteredMatches = useMemo(() => {
+    return matches.filter((m) => {
+      const matchesGroup = activeGroup === "all" || m.group_name === activeGroup;
+      const matchesStage =
+        stageFilter === "all" ||
+        (stageFilter === "group" && m.group_name.startsWith("Group")) ||
+        (stageFilter === "knockout" && !m.group_name.startsWith("Group"));
+      return matchesGroup && matchesStage;
+    });
+  }, [matches, activeGroup, stageFilter]);
 
-    // Auto-expand today or first upcoming date
-    const today = new Date();
-    today.setHours(0, 0, 0, 0);
+  // Group by date
+  const groupedMatches = useMemo(
+    () => groupMatchesByDate(filteredMatches),
+    [filteredMatches]
+  );
+
+  // Get unique groups
+  const groups = useMemo(() => {
+    const groupSet = new Set(matches.map((m) => m.group_name));
+    return Array.from(groupSet).sort();
+  }, [matches]);
+
+  // Auto-expand today or first upcoming date
+  const initialExpandedDate = useMemo(() => {
+    if (loading || groupedMatches.length === 0) return null;
+
+    const nowColombia = new Date(
+      new Date().toLocaleString("en-US", { timeZone: "America/Bogota" })
+    );
+    const today = new Date(
+      nowColombia.getFullYear(),
+      nowColombia.getMonth(),
+      nowColombia.getDate()
+    );
     const todayStr = today.toLocaleDateString("es-ES", {
       weekday: "long",
       year: "numeric",
       month: "long",
       day: "numeric",
     });
-    const todayHasMatches = allMatches.some((m) => {
-      const d = new Date(m.match_date);
-      d.setHours(0, 0, 0, 0);
-      return d.getTime() === today.getTime();
-    });
+
+    const todayHasMatches = groupedMatches.some(([date]) => date === todayStr);
+
     if (todayHasMatches) {
-      setExpandedDate(todayStr);
-    } else {
-      const upcoming = allMatches.find((m) => new Date(m.match_date) > new Date());
-      if (upcoming) {
-        setExpandedDate(
-          new Date(upcoming.match_date).toLocaleDateString("es-ES", {
-            weekday: "long",
-            year: "numeric",
-            month: "long",
-            day: "numeric",
-          })
-        );
-      }
+      return todayStr;
+    } else if (groupedMatches.length > 0) {
+      return groupedMatches[0][0];
     }
+    return null;
+  }, [loading, groupedMatches]);
 
-    const { data: preds } = await supabase
-      .from("predictions")
-      .select("*")
-      .eq("user_id", userId);
-
-    if (preds) {
-      const predMap: Record<number, Prediction> = {};
-      for (const p of preds) {
-        predMap[p.match_id] = p;
-      }
-      setPredictions(predMap);
-    }
-
-    setLoading(false);
-  }, []);
+  // Initialize expanded date on first load
+  if (!initialLoadDone && initialExpandedDate && !expandedDate) {
+    setExpandedDate(initialExpandedDate);
+    setInitialLoadDone(true);
+  }
 
   useEffect(() => {
     if (!authLoading && !user) {
@@ -121,78 +103,9 @@ export default function MatchesPage() {
     }
   }, [user, authLoading, router]);
 
-  useEffect(() => {
-    if (user) {
-      // eslint-disable-next-line react-hooks/set-state-in-effect
-      loadData(user.id);
-    }
-  }, [user, loadData]);
-
-  const handlePredictionSaved = useCallback(
-    (matchId: number, prediction: Prediction) => {
-      setPredictions((prev) => ({ ...prev, [matchId]: prediction }));
-    },
-    []
-  );
-
-  const toggleDate = useCallback((date: string) => {
-    setExpandedDate((prev) => (prev === date ? null : date));
-  }, []);
-
-  const expandAll = useCallback(() => {
-    // Not needed anymore - kept for compatibility
-    const grouped = groupMatchesByDate(matches);
-    if (grouped.length > 0) {
-      setExpandedDate(grouped[0][0]);
-    }
-  }, [matches]);
-
-  const collapseAll = useCallback(() => {
-    setExpandedDate(null);
-  }, []);
-
-  const groups = [
-    "all",
-    "Group A",
-    "Group B",
-    "Group C",
-    "Group D",
-    "Group E",
-    "Group F",
-    "Group G",
-    "Group H",
-    "Group I",
-    "Group J",
-    "Group K",
-    "Group L",
-    "Round of 32",
-    "Round of 16",
-    "Quarterfinals",
-    "Semifinals",
-    "Third Place",
-    "Final",
-  ];
-
-  let filteredMatches = matches;
-
-  if (stageFilter === "group") {
-    filteredMatches = matches.filter((m) => m.group_name.startsWith("Group"));
-  } else if (stageFilter === "knockout") {
-    filteredMatches = matches.filter((m) => !m.group_name.startsWith("Group"));
-  }
-
-  if (activeGroup !== "all") {
-    filteredMatches = filteredMatches.filter(
-      (m) => m.group_name === activeGroup
-    );
-  }
-
-  const groupedMatches = groupMatchesByDate(filteredMatches);
-  const predictedCount = Object.keys(predictions).length;
-  const totalMatches = matches.length;
-  const totalUpcoming = matches.filter(
-    (m) => new Date(m.match_date) > new Date()
-  ).length;
+  const toggleDate = (date: string) => {
+    setExpandedDate(expandedDate === date ? null : date);
+  };
 
   if (authLoading || loading) {
     return (
@@ -205,107 +118,71 @@ export default function MatchesPage() {
   return (
     <div className="min-h-screen">
       <main className="mx-auto max-w-2xl px-4 py-6">
-        {/* Stats */}
-        <div className="mb-6 grid grid-cols-3 gap-3">
-          <div className="rounded-2xl border border-slate-700/40 bg-slate-800/40 p-3.5 text-center">
-            <div className="text-2xl font-bold text-blue-400">
-              {predictedCount}
-            </div>
-            <div className="text-xs text-slate-500">Mis predicciones</div>
+        {/* Title */}
+        <div className="mb-5 text-center">
+          <div className="mx-auto mb-3 flex h-14 w-14 items-center justify-center rounded-2xl bg-blue-600/15 border border-blue-500/15">
+            <CalendarDays className="h-7 w-7 text-blue-400" />
           </div>
-          <div className="rounded-2xl border border-slate-700/40 bg-slate-800/40 p-3.5 text-center">
-            <div className="text-2xl font-bold text-amber-400">
-              {totalUpcoming}
-            </div>
-            <div className="text-xs text-slate-500">Pendientes</div>
-          </div>
-          <div className="rounded-2xl border border-slate-700/40 bg-slate-800/40 p-3.5 text-center">
-            <div className="text-2xl font-bold text-slate-300">
-              {totalMatches}
-            </div>
-            <div className="text-xs text-slate-500">Total</div>
-          </div>
+          <h1 className="text-xl font-bold text-white">Calendario</h1>
+          <p className="mt-1 text-sm text-slate-400">
+            Haz tu predicción para cada partido
+          </p>
         </div>
 
-        {/* Stage filter */}
-        <div className="mb-4 flex items-center gap-2">
-          {([
-            { key: "all", label: "Todos", icon: Swords },
-            { key: "group", label: "Fase de Grupos", icon: Shield },
-            { key: "knockout", label: "Eliminatorias", icon: Trophy },
-          ] as const).map(({ key, label, icon: Icon }) => (
-            <button
-              key={key}
-              onClick={() => {
-                setStageFilter(key);
-                setActiveGroup("all");
-              }}
-              className={clsx(
-                "flex items-center gap-1.5 rounded-xl px-3.5 py-2 text-xs font-medium transition-all",
-                stageFilter === key
-                  ? "bg-blue-600 text-white shadow-md shadow-blue-600/25"
-                  : "bg-slate-800/60 text-slate-400 hover:bg-slate-700/60 hover:text-white border border-slate-700/40"
-              )}
-            >
-              <Icon className="h-3.5 w-3.5" />
-              {label}
-            </button>
-          ))}
-        </div>
-
-        {/* Group filter */}
-        <div className="mb-4 flex items-center gap-2 overflow-x-auto pb-2 scrollbar-hide">
-          <Filter className="h-4 w-4 flex-shrink-0 text-slate-600" />
-          {groups
-            .filter((g) => {
-              if (stageFilter === "group")
-                return g === "all" || g.startsWith("Group");
-              if (stageFilter === "knockout")
-                return (
-                  g === "all" ||
-                  [
-                    "Round of 32",
-                    "Round of 16",
-                    "Quarterfinals",
-                    "Semifinals",
-                    "Third Place",
-                    "Final",
-                  ].includes(g)
-                );
-              return true;
-            })
-            .map((g) => (
+        {/* Filters */}
+        <div className="mb-4 space-y-3">
+          {/* Stage filter */}
+          <div className="flex gap-2">
+            {(["all", "group", "knockout"] as StageFilter[]).map((stage) => (
               <button
-                key={g}
-                onClick={() => setActiveGroup(g)}
+                key={stage}
+                onClick={() => setStageFilter(stage)}
                 className={clsx(
-                  "flex-shrink-0 rounded-xl px-3 py-1.5 text-xs font-medium transition-all",
-                  activeGroup === g
-                    ? "bg-blue-600 text-white shadow-sm"
-                    : "bg-slate-800/50 text-slate-400 hover:bg-slate-700/50 hover:text-white border border-slate-700/30"
+                  "flex-1 rounded-xl px-3 py-2 text-xs font-medium transition-all",
+                  stageFilter === stage
+                    ? "bg-blue-500/20 text-blue-400 border border-blue-500/30"
+                    : "bg-slate-800/40 text-slate-400 border border-slate-700/30 hover:bg-slate-700/40"
                 )}
               >
-                {g === "all" ? "Todos" : g.replace("Group ", "Gr. ")}
+                {stage === "all"
+                  ? "Todos"
+                  : stage === "group"
+                  ? "Grupos"
+                  : "Eliminatorias"}
               </button>
             ))}
-        </div>
+          </div>
 
-        {/* Expand/Collapse all */}
-        <div className="mb-4 flex items-center justify-end gap-2">
-          <button
-            onClick={expandAll}
-            className="flex items-center gap-1 rounded-lg px-2.5 py-1 text-xs text-slate-500 hover:text-slate-300 transition-colors"
-          >
-            <ChevronDown className="h-3.5 w-3.5" />
-            Expandir todo
-          </button>
-          <button
-            onClick={collapseAll}
-            className="flex items-center gap-1 rounded-lg px-2.5 py-1 text-xs text-slate-500 hover:text-slate-300 transition-colors"
-          >
-            <ChevronUp className="h-3.5 w-3.5" />
-            Colapsar todo
-          </button>
+          {/* Group filter */}
+          {stageFilter !== "knockout" && (
+            <div className="flex gap-2 overflow-x-auto pb-2 scrollbar-hide">
+              <button
+                onClick={() => setActiveGroup("all")}
+                className={clsx(
+                  "whitespace-nowrap rounded-xl px-3 py-1.5 text-xs font-medium transition-all",
+                  activeGroup === "all"
+                    ? "bg-blue-500/20 text-blue-400 border border-blue-500/30"
+                    : "bg-slate-800/40 text-slate-400 border border-slate-700/30 hover:bg-slate-700/40"
+                )}
+              >
+                Todos
+              </button>
+              {groups.map((group) => (
+                <button
+                  key={group}
+                  onClick={() => setActiveGroup(group)}
+                  className={clsx(
+                    "whitespace-nowrap rounded-xl px-3 py-1.5 text-xs font-medium transition-all",
+                    activeGroup === group
+                      ? "bg-blue-500/20 text-blue-400 border border-blue-500/30"
+                      : "bg-slate-800/40 text-slate-400 border border-slate-700/30 hover:bg-slate-700/40"
+                  )}
+                >
+                  {group}
+                </button>
+              ))}
+            </div>
+          )}
         </div>
 
         {/* Matches by date */}
@@ -315,11 +192,24 @@ export default function MatchesPage() {
             const matchCount = (dateMatches as Match[]).length;
 
             // Check if this date is today
-            const firstMatchDate = new Date((dateMatches as Match[])[0].match_date);
-            const today = new Date();
-            today.setHours(0, 0, 0, 0);
-            const matchDay = new Date(firstMatchDate);
-            matchDay.setHours(0, 0, 0, 0);
+            const nowColombia = new Date(
+              new Date().toLocaleString("en-US", {
+                timeZone: "America/Bogota",
+              })
+            );
+            const today = new Date(
+              nowColombia.getFullYear(),
+              nowColombia.getMonth(),
+              nowColombia.getDate()
+            );
+            const firstMatchDate = new Date(
+              (dateMatches as Match[])[0].match_date
+            );
+            const matchDay = new Date(
+              firstMatchDate.getFullYear(),
+              firstMatchDate.getMonth(),
+              firstMatchDate.getDate()
+            );
             const isToday = matchDay.getTime() === today.getTime();
 
             // Check if date is in the past
@@ -327,7 +217,7 @@ export default function MatchesPage() {
 
             // Count predictions for this date
             const predictedInDate = (dateMatches as Match[]).filter(
-              (m) => predictions[m.id]
+              (m) => predictionsMap[m.id]
             ).length;
 
             return (
@@ -357,96 +247,55 @@ export default function MatchesPage() {
                   ) : (
                     <Calendar className="h-4 w-4 text-slate-500 flex-shrink-0" />
                   )}
-
                   <div className="flex-1 min-w-0">
                     <div className="flex items-center gap-2">
-                      <h2
+                      <span
                         className={clsx(
-                          "text-sm font-semibold capitalize truncate",
+                          "text-sm font-medium capitalize truncate",
                           isToday ? "text-blue-300" : "text-slate-300"
                         )}
                       >
                         {date}
-                      </h2>
-                      {isToday && (
-                        <span className="rounded-md bg-blue-500/20 px-2 py-0.5 text-[10px] font-bold text-blue-400 uppercase">
-                          Hoy
-                        </span>
-                      )}
-                      {isPast && !isToday && (
-                        <span className="rounded-md bg-slate-700/50 px-2 py-0.5 text-[10px] font-medium text-slate-500 uppercase">
-                          Finalizado
-                        </span>
-                      )}
-                    </div>
-                    <div className="mt-0.5 flex items-center gap-2 text-xs text-slate-500">
-                      <span>
-                        {matchCount} partido{matchCount !== 1 ? "s" : ""}
                       </span>
-                      {predictedInDate > 0 && (
-                        <>
-                          <span className="text-slate-700">·</span>
-                          <span className="text-blue-400/70">
-                            {predictedInDate}/{matchCount} predecido
-                            {predictedInDate !== matchCount ? "s" : ""}
-                          </span>
-                        </>
+                      {isToday && (
+                        <span className="rounded-md bg-blue-500/20 px-1.5 py-0.5 text-[10px] font-medium text-blue-400">
+                          HOY
+                        </span>
                       )}
                     </div>
+                    <span className="text-xs text-slate-500">
+                      {predictedInDate}/{matchCount} predicciones
+                    </span>
                   </div>
-
-                  <div
+                  <Filter
                     className={clsx(
-                      "flex h-7 w-7 items-center justify-center rounded-lg transition-all",
+                      "h-4 w-4 transition-transform",
                       isExpanded
-                        ? "bg-blue-600/20 text-blue-400"
-                        : "bg-slate-700/40 text-slate-500"
+                        ? "text-blue-400 rotate-0"
+                        : "text-slate-500 -rotate-90"
                     )}
-                  >
-                    <ChevronDown
-                      className={clsx(
-                        "h-4 w-4 transition-transform duration-200",
-                        isExpanded && "rotate-180"
-                      )}
-                    />
-                  </div>
+                  />
                 </button>
 
-                {/* Matches - collapsible */}
-                <div
-                  className={clsx(
-                    "transition-all duration-300 ease-in-out",
-                    isExpanded
-                      ? "max-h-[2000px] opacity-100"
-                      : "max-h-0 opacity-0"
-                  )}
-                >
-                  <div className="space-y-2.5 px-4 pb-4">
+                {/* Matches */}
+                {isExpanded && (
+                  <div className="border-t border-slate-700/20 p-3 space-y-3">
                     {(dateMatches as Match[]).map((match) => (
                       <MatchCard
                         key={match.id}
                         match={match}
-                        prediction={predictions[match.id]}
-                        onPredictionSaved={(pred) =>
-                          handlePredictionSaved(match.id, pred)
-                        }
+                        prediction={predictionsMap[match.id]}
+                        onPredictionSaved={() => {
+                          // SWR will auto-revalidate
+                        }}
                       />
                     ))}
                   </div>
-                </div>
+                )}
               </div>
             );
           })}
         </div>
-
-        {filteredMatches.length === 0 && (
-          <div className="rounded-2xl border border-slate-700/40 bg-slate-800/40 p-8 text-center">
-            <Calendar className="mx-auto mb-3 h-12 w-12 text-slate-600" />
-            <p className="text-slate-400">
-              No hay partidos en esta categoria
-            </p>
-          </div>
-        )}
       </main>
     </div>
   );

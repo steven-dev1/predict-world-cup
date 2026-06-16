@@ -62,7 +62,7 @@ export function getCountryCode(teamName: string): string {
 
 export function getFlagUrl(teamName: string): string {
   const code = getCountryCode(teamName);
-  return `https://flagcdn.com/w80/${code}.png`;
+  return `https://flagcdn.com/w40/${code}.png`;
 }
 
 export function FlagImg({
@@ -73,12 +73,13 @@ export function FlagImg({
   className?: string;
 }) {
   const code = getCountryCode(teamName);
-  const url = `https://flagcdn.com/w80/${code}.png`;
+  const url = `https://flagcdn.com/w40/${code}.png`;
 
   return (
     <img
       src={url}
       alt={teamName}
+      loading="lazy"
       className={`inline-block object-cover rounded-sm ${className}`}
       onError={(e) => {
         // Fallback: show first 2 letters if flag fails to load
@@ -103,8 +104,9 @@ export function Flag({
   return (
     <span className={`relative inline-flex items-center justify-center ${className}`}>
       <img
-        src={`https://flagcdn.com/w80/${code}.png`}
+        src={`https://flagcdn.com/w40/${code}.png`}
         alt={teamName}
+        loading="lazy"
         className="h-full w-full object-cover rounded-sm"
         onError={(e) => {
           const img = e.target as HTMLImageElement;

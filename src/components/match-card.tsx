@@ -80,19 +80,21 @@ export function MatchCard({
 }: MatchCardProps) {
   const { user } = useAuth();
   const [scoreHome, setScoreHome] = useState<string>(
-    prediction?.score_home?.toString() ?? ""
+    prediction?.score_home?.toString() ?? "0"
   );
   const [scoreAway, setScoreAway] = useState<string>(
-    prediction?.score_away?.toString() ?? ""
+    prediction?.score_away?.toString() ?? "0"
   );
   const [saving, setSaving] = useState(false);
   const [saved, setSaved] = useState(!!prediction);
   const [isLocked, setIsLocked] = useState(false);
 
   useEffect(() => {
-    const matchDate = new Date(match.match_date);
     const check = () => {
-      setIsLocked(new Date() >= matchDate);
+      // "Ahora" en Colombia para comparar con fechas de DB (ya en Colombia)
+      const nowColombia = new Date(new Date().toLocaleString("en-US", { timeZone: "America/Bogota" }));
+      const matchDate = new Date(match.match_date);
+      setIsLocked(nowColombia >= matchDate);
     };
     check();
     const interval = setInterval(check, 30000);
